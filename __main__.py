@@ -1,13 +1,21 @@
 import sys
+
 from networkx import shortest_path
-from handler import FileGraphHandler
+
+from handler import MapGraphHandler
+
 
 def main(osmfile):
-    h = FileGraphHandler()
+    h = MapGraphHandler()
     h.apply_file(osmfile)
 
-    print("Graph: %s" % h.graph)
-    print(shortest_path(h.graph, 269147990, 695550988, "distance"))
+    print("Graph: %s" % h.map)
+    print(
+        [
+            h.map.nodes[i]["name"]
+            for i in shortest_path(h.map, 269147990, 695550988, "distance")
+        ]
+    )
 
     return 0
 
