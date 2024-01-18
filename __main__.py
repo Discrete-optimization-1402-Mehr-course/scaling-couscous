@@ -9,11 +9,11 @@ def main(osmfile):
     h = MapGraphHandler()
     h.apply_file(osmfile)
 
-    print("Graph: %s" % h.map)
+    print("Graph: %s" % h.map.city_graph)
     print(
         [
-            h.map.nodes[i]["name"]
-            for i in shortest_path(h.map, 269147990, 695550988, "distance")
+            h.map.city_graph.nodes[i]["name"]
+            for i in shortest_path(h.map.city_graph, 269147990, 695550988, "distance")
         ]
     )
 

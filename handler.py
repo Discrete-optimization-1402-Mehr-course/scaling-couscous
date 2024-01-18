@@ -1,19 +1,18 @@
-from networkx import Graph, add_cycle, add_path
+from networkx import DiGraph, Graph, add_cycle, add_path, subgraph_view
 from osmium import Node, Relation, SimpleHandler, Way
 
+from problem import BusLine, PublicStation, PublicTransportationRoute, Map, SubwayLine
 from util import distance
 
 
 class MapGraphHandler(SimpleHandler):
     def __init__(self):
         super().__init__()
-        self.map = Graph()
-        self.bus_lines = {}
-        self.subway_lines = {}
-        self.public_stations = []
+        self.map = Map()
+        self.ways = {}
 
     def node(self, n: Node):
-        self.map.add_node(
+        self.map.city_graph.add_node(
             n.id,
             location=n.location,
             name=n.tags.get("name", f"node_{n.id}"),
@@ -25,33 +24,58 @@ class MapGraphHandler(SimpleHandler):
         else:
             adder = add_path
 
-        adder(self.map, (node.ref for node in w.nodes))
+        adder(self.map.city_graph, (node.ref for node in w.nodes), way_id=w.id)
 
     def relation(self, r: Relation):
-        match r.tags["type"]:
-            case "route":
-                match r.tags["route"]:
+        match dict(r.tags):
+            case {"type": "route", "route": route}:
+                match route:
                     case "bus":
-                        self.bus_lines[r.id, r.tags.get("note")] = [
-                            n.ref for n in r.members
-                        ]
+                        self.map.bus_lines.append(BusLine(*self.relation_public_transport(r)))
 
                     case "subway" | "light_rail":
-                        self.subway_lines[r.id, r.tags.get("note")] = [
-                            n.ref for n in r.members
-                        ]
+                        self.map.subway_lines.append(SubwayLine(*self.relation_public_transport(r)))
 
-            case "public_transport":
-                assert r.tags["public_transport"].startswith("stop_area")
+            case {"type": "public_transport", "public_transport": public_transport}:
+                assert public_transport.startswith("stop_area")
 
-                self.public_stations.append([n.ref for n in r.members])
+                self.map.public_stations.append(
+                    PublicStation([n.ref for n in r.members])
+                )
+
+    def edge_filter(self, way_ids: set[int]):
+        def filter(a: int, b: int):
+            return self.map.city_graph.edges[a, b] in way_ids
+
+        return filter
+
+    def relation_public_transport(self, r: Relation):
+        route_name = (r.tags.get("ref") or "") + (r.tags.get("name") or "")
+        stops = []
+
+        way_ids: set[int] = set()
+        for member in r.members:
+            match member.type:
+                case "n":
+                    if member.role.startswith("stop") or member.role.startswith(
+                        "platform"
+                    ):
+                        stops.append(member.ref)
+                case "w":
+                    way_ids.add(member.ref)
+
+        route = subgraph_view(
+            self.map.city_graph, filter_edge=self.edge_filter(way_ids)
+        )
+
+        return (route_name, route, stops)
 
     def apply_file(self, *args, **kwargs) -> None:
         super().apply_file(*args, **kwargs)
-        self._calculate_weights()
+        self._calculate_weights()  # TODO: move this to router class
 
     def _calculate_weights(self):
-        for edge in self.map.edges:
-            fr, to = (self.map.nodes[i]["location"] for i in edge)
+        for edge in self.map.city_graph.edges:
+            fr, to = (self.map.city_graph.nodes[i]["location"] for i in edge)
 
-            self.map.edges[edge]["distance"] = distance(fr, to)
+            self.map.city_graph.edges[edge]["distance"] = distance(fr, to)
