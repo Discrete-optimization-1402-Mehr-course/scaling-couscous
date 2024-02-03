@@ -1,8 +1,8 @@
-from networkx import DiGraph, Graph, add_cycle, add_path, subgraph_view
 from osmium import Node, Relation, SimpleHandler, Way
 
-from problem import BusLine, PublicStation, PublicTransportationRoute, Map, SubwayLine
-from util import distance
+from problem import BusLine, PublicStation, Map, SubwayLine
+from util import distance, addEdges
+from itertools import pairwise
 
 
 class MapGraphHandler(SimpleHandler):
@@ -13,28 +13,35 @@ class MapGraphHandler(SimpleHandler):
 
     def node(self, n: Node):
         self.map.city_graph.add_node(
-            n.id,
+            str(n.id),
             location=n.location,
             name=n.tags.get("name", f"node_{n.id}"),
         )
 
     def way(self, w: Way):
-        if w.is_closed():
-            adder = add_cycle
-        else:
-            adder = add_path
+        w_nodes = [str(node.ref) for node in w.nodes]
 
-        adder(self.map.city_graph, (node.ref for node in w.nodes), way_id=w.id)
+        addEdges(
+            self.map.city_graph,
+            w_nodes,
+            1.42,
+            reversed=True,
+            data={"route_name": "foot", "cost": 0},
+        )
 
     def relation(self, r: Relation):
         match dict(r.tags):
             case {"type": "route", "route": route}:
                 match route:
                     case "bus":
-                        self.map.bus_lines.append(BusLine(*self.relation_public_transport(r)))
+                        self.map.bus_lines.append(
+                            BusLine(*self.relation_public_transport(r))
+                        )
 
                     case "subway" | "light_rail":
-                        self.map.subway_lines.append(SubwayLine(*self.relation_public_transport(r)))
+                        self.map.subway_lines.append(
+                            SubwayLine(*self.relation_public_transport(r))
+                        )
 
             case {"type": "public_transport", "public_transport": public_transport}:
                 assert public_transport.startswith("stop_area")
@@ -42,12 +49,6 @@ class MapGraphHandler(SimpleHandler):
                 self.map.public_stations.append(
                     PublicStation([n.ref for n in r.members])
                 )
-
-    def edge_filter(self, way_ids: set[int]):
-        def filter(a: int, b: int):
-            return self.map.city_graph.edges[a, b] in way_ids
-
-        return filter
 
     def relation_public_transport(self, r: Relation):
         route_name = (r.tags.get("ref") or "") + (r.tags.get("name") or "")
@@ -64,18 +65,44 @@ class MapGraphHandler(SimpleHandler):
                 case "w":
                     way_ids.add(member.ref)
 
-        route = subgraph_view(
-            self.map.city_graph, filter_edge=self.edge_filter(way_ids)
-        )
-
-        return (route_name, route, stops)
+        return (route_name, stops, r.tags.get("ref") or 0)
 
     def apply_file(self, *args, **kwargs) -> None:
         super().apply_file(*args, **kwargs)
-        self._calculate_weights()  # TODO: move this to router class
+        stops = {}
+        for b in self.map.bus_lines:
+            for s in b.stops:
+                if str(s) in stops:
+                    stops[str(s)].append(b)
+                else:
+                    stops[str(s)] = [b]
 
-    def _calculate_weights(self):
-        for edge in self.map.city_graph.edges:
-            fr, to = (self.map.city_graph.nodes[i]["location"] for i in edge)
+        for k, _v in stops.items():
+            if not k in self.map.city_graph.nodes:
+                continue
+            original_node = self.map.city_graph.nodes[k]
+            for v in _v:
+                self.map.city_graph.add_node(
+                    f"{k}_{v.id}",
+                    location=original_node["location"],
+                    name=f"{original_node['name']}_{v.id}",
+                )
+                self.map.city_graph.add_edge(f"{k}_{v.id}", k, time=0, cost=0)
+                self.map.city_graph.add_edge(k, f"{k}_{v.id}", time=600, cost=1200)
+            for i, j in pairwise(_v):
+                self.map.city_graph.add_edge(
+                    f"{k}_{i.id}", f"{k}_{j.id}", time=600, cost=1200
+                )
+                self.map.city_graph.add_edge(
+                    f"{k}_{j.id}", f"{k}_{i.id}", time=600, cost=1200
+                )
 
-            self.map.city_graph.edges[edge]["distance"] = distance(fr, to)
+        for b in self.map.bus_lines:
+            new_stops = [f"{s}_{b.id}" for s in b.stops]
+            addEdges(
+                self.map.city_graph,
+                new_stops,
+                5,
+                reversed=True,
+                data={"route_name": b.route_name, "cost": 0},
+            )
