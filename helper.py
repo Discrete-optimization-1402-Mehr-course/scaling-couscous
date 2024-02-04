@@ -7,7 +7,12 @@ from gpx_converter import Converter
 
 def pretty_print_route(p: Problem, route: List[str]):
     # TODO: print route in a human readable form
+    total_time = 0
+    for i,j in pairwise(route):
+        total_time += float(p.map.city_graph.get_edge_data(i,j)['time'])
+
     print(route)
+    print("total time: ", total_time)
 
 
 def export_gpx(p: Problem, route: List[str], filename: str):
